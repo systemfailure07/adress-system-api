@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:secure-properties="http://www.mulesoft.org/schema/mule/secure-properties"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/schema/mule/secure-properties/current/mule-secure-properties.xsd">
+
+    <configuration-properties
+        doc:name="Configuration properties"
+        file="config-dev.properties" />
+
+    <db:config name="Database_Config"
+               doc:name="Database Config">
+        <db:generic-connection
+            url="${db.url}"
+            driverClassName="org.postgresql.Driver"
+            user="${secure::db.username}"
+            password="${secure::db.password}" />
+    </db:config>
+
+    <http:listener-config name="HTTP_Listener_config"
+                          doc:name="HTTP Listener config">
+        <http:listener-connection
+            host="0.0.0.0"
+            port="8081" />
+    </http:listener-config>
+
+    <configuration-properties doc:name="Configuration properties" doc:id="43ed58d7-240e-43c7-b79a-d740c497b953" file="config-dev.properties" />
+	<secure-properties:config name="Secure_Properties_Config" doc:name="Secure Properties Config" doc:id="df18a948-4365-4502-8695-8bd4185fa06f" file="config-dev.properties" key="mule12345" >
+		<secure-properties:encrypt algorithm="Blowfish" />
+	</secure-properties:config>
+	<flow name="get-address-by-id-flow"
+          doc:name="Get Address By ID">
+
+        <http:listener
+            doc:name="Address Listener"
+            config-ref="HTTP_Listener_config"
+            path="/addresses/{addressId}"
+            allowedMethods="GET">
+
+            <http:response
+                statusCode="#[vars.httpStatus default 200]" />
+
+            <http:error-response
+                statusCode="#[vars.httpStatus default 500]" />
+        </http:listener>
+
+        <set-variable
+            doc:name="Capture address ID"
+            variableName="addressId"
+            value="#[attributes.uriParams.addressId default '']" />
+
+        <choice doc:name="Validate address ID">
+
+            <when expression="#[matches(((vars.addressId default '') as String), /^[1-9][0-9]*$/)]">
+
+                <db:select
+                    doc:name="Find Address"
+                    config-ref="Database_Config" transactionalAction="NOT_SUPPORTED">
+
+                    <db:sql><![CDATA[SELECT
+    address_id AS "addressId",
+    city,
+    state,
+    postal_code AS "postalCode",
+    country
+FROM address
+WHERE address_id = :addressId]]></db:sql>
+
+                    <db:input-parameters><![CDATA[#[{ addressId: vars.addressId as Number }]]]></db:input-parameters>
+
+                </db:select>
+
+                <ee:transform doc:name="Return One Address">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[
+%dw 2.0
+output application/json
+---
+if (isEmpty(payload)) null else payload[0]
+                        ]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+
+                <choice doc:name="Address Found?">
+
+                    <when expression="#[payload == null]">
+
+                        <set-variable
+                            doc:name="Set Not Found Status"
+                            variableName="httpStatus"
+                            value="#[404]" />
+
+                        <ee:transform doc:name="Address Not Found Response">
+                            <ee:message>
+                                <ee:set-payload><![CDATA[
+%dw 2.0
+output application/json
+---
+{
+    success: false,
+    code: "ADDRESS_NOT_FOUND",
+    message: "No address was found for the supplied addressId",
+    addressId: vars.addressId,
+    correlationId: correlationId
+}
+                                ]]></ee:set-payload>
+                            </ee:message>
+                        </ee:transform>
+
+                    </when>
+
+                    <otherwise>
+                        <set-variable
+                            doc:name="Set Success Status"
+                            variableName="httpStatus"
+                            value="#[200]" />
+                    </otherwise>
+
+                </choice>
+
+            </when>
+
+            <otherwise>
+
+                <set-variable
+                    doc:name="Set Invalid ID Status"
+                    variableName="httpStatus"
+                    value="#[400]" />
+
+                <ee:transform doc:name="Invalid Address ID Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[
+%dw 2.0
+output application/json
+---
+{
+    success: false,
+    code: "INVALID_ADDRESS_ID",
+    message: "addressId must be a positive integer",
+    addressId: vars.addressId,
+    correlationId: correlationId
+}
+                        ]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+
+            </otherwise>
+
+        </choice>
+
+        <error-handler>
+            <on-error-continue
+                type="ANY"
+                logException="true"
+                enableNotifications="true">
+
+                <set-variable
+                    doc:name="Set Internal Error Status"
+                    variableName="httpStatus"
+                    value="#[500]" />
+
+                <logger
+                    level="ERROR"
+                    doc:name="Log Address API Error"
+                    message="#[ 'Address API failed. correlationId=' ++ correlationId ++ '; errorType=' ++ (error.errorType.identifier default 'UNKNOWN') ]" />
+
+                <ee:transform doc:name="Internal Error Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[
+%dw 2.0
+output application/json
+---
+{
+    success: false,
+    code: "ADDRESS_API_ERROR",
+    message: "Address lookup could not be completed",
+    correlationId: correlationId
+}
+                        ]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+
+            </on-error-continue>
+        </error-handler>
+
+    </flow>
+
+</mule>
