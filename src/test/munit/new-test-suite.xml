@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xsi:schemaLocation="
+      http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+      http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+      http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+      http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+
+    <munit:config name="address-api-test-suite.xml"/>
+
+    <!-- 1. POSITIVE: address exists -->
+    <munit:test name="address-api-get-address-foundTest"
+                description="GET address returns HTTP 200 when address exists">
+
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:then-return>
+                    <munit-tools:payload
+                        value="#[[{address_id: 1, city: 'Hyderabad', state: 'Telangana', postal_code: '508001', country: 'India'}]]"
+                        mediaType="application/java"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value="#[{}]" mediaType="application/java"/>
+                <munit:attributes value="#[{uriParams: {addressId: '1'}}]"/>
+            </munit:set-event>
+            <flow-ref name="get-address-by-id-flow"/>
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that
+                expression="#[vars.httpStatus]"
+                is="#[MunitTools::equalTo(200)]"
+                message="Existing address should return HTTP 200"/>
+            <munit-tools:assert-that
+                expression="#[payload.city]"
+                is="#[MunitTools::equalTo('Hyderabad')]"
+                message="Response should contain the address city"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- 2. NEGATIVE: address does not exist -->
+    <munit:test name="address-api-get-address-not-foundTest"
+                description="GET address returns HTTP 404 when no row exists">
+
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[]]" mediaType="application/java"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value="#[{}]" mediaType="application/java"/>
+                <munit:attributes value="#[{uriParams: {addressId: '4040'}}]"/>
+            </munit:set-event>
+            <flow-ref name="get-address-by-id-flow"/>
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that
+                expression="#[vars.httpStatus]"
+                is="#[MunitTools::equalTo(404)]"
+                message="Unknown address ID should return HTTP 404"/>
+            <munit-tools:assert-that
+                expression="#[payload.code]"
+                is="#[MunitTools::equalTo('ADDRESS_NOT_FOUND')]"
+                message="Response should contain ADDRESS_NOT_FOUND"/>
+            <munit-tools:assert-that
+                expression="#[payload.success]"
+                is="#[MunitTools::equalTo(false)]"
+                message="Not-found response should have success false"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- 3. NEGATIVE: non-numeric address ID -->
+    <munit:test name="address-api-invalid-nonnumeric-idTest"
+                description="GET address returns HTTP 400 for a non-numeric ID">
+
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value="#[{}]" mediaType="application/java"/>
+                <munit:attributes value="#[{uriParams: {addressId: 'abc'}}]"/>
+            </munit:set-event>
+            <flow-ref name="get-address-by-id-flow"/>
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that
+                expression="#[vars.httpStatus]"
+                is="#[MunitTools::equalTo(400)]"
+                message="Non-numeric address ID should return HTTP 400"/>
+            <munit-tools:assert-that
+                expression="#[payload.code]"
+                is="#[MunitTools::equalTo('INVALID_ADDRESS_ID')]"
+                message="Response should contain INVALID_ADDRESS_ID"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- 4. NEGATIVE: zero is invalid -->
+    <munit:test name="address-api-invalid-zero-idTest"
+                description="GET address returns HTTP 400 for ID zero">
+
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value="#[{}]" mediaType="application/java"/>
+                <munit:attributes value="#[{uriParams: {addressId: '0'}}]"/>
+            </munit:set-event>
+            <flow-ref name="get-address-by-id-flow"/>
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that
+                expression="#[vars.httpStatus]"
+                is="#[MunitTools::equalTo(400)]"
+                message="Address ID zero should return HTTP 400"/>
+            <munit-tools:assert-that
+                expression="#[payload.code]"
+                is="#[MunitTools::equalTo('INVALID_ADDRESS_ID')]"
+                message="Response should contain INVALID_ADDRESS_ID"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- 5. NEGATIVE: database error -->
+    <munit:test name="address-api-database-errorTest"
+                description="GET address returns HTTP 500 when the database fails">
+
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="DB:CONNECTIVITY"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value="#[{}]" mediaType="application/java"/>
+                <munit:attributes value="#[{uriParams: {addressId: '1'}}]"/>
+            </munit:set-event>
+            <flow-ref name="get-address-by-id-flow"/>
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that
+                expression="#[vars.httpStatus]"
+                is="#[MunitTools::equalTo(500)]"
+                message="Database error should return HTTP 500"/>
+            <munit-tools:assert-that
+                expression="#[payload.code]"
+                is="#[MunitTools::equalTo('ADDRESS_API_ERROR')]"
+                message="Response should contain ADDRESS_API_ERROR"/>
+        </munit:validation>
+    </munit:test>
+
+</mule>
